@@ -49,11 +49,19 @@ pub fn _dlstart(arg_page: [*]usize, dyns: [*]std.elf.Dyn) callconv(.C) noreturn 
     _dlstart_impl(arg_page, dyns) catch exit(1);
 }
 
+const AUX_WE_CARE = [_]usize{
+    std.elf.AT_ENTRY,
+    std.elf.AT_PHDR,
+    std.elf.AT_EXECFN,
+};
+
+const AUX_BUF_SIZE: usize = std.mem.max(usize, &AUX_WE_CARE) + 1;
+
 pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     const argc = arg_page[0];
     const argv: [*][*:0]u8 = @ptrCast(arg_page + 1);
     const argv0 = std.mem.sliceTo(argv[0], 0);
-    _ = try std.io.getStdOut().write("Running as ");
+    _ = try std.io.getStdOut().write("As: ");
     _ = try std.io.getStdOut().write(argv0);
     _ = try std.io.getStdOut().write("\n");
 
@@ -68,13 +76,20 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
 
     const auxp: [*]usize = @ptrCast(envp + envidx + 1);
     var auxidx: usize = 0;
+    var auxbuf: [AUX_BUF_SIZE]usize = .{};
     while (auxp[auxidx] != 0) : (auxidx += 2) {
         _ = try std.io.getStdOut().write("[A] ");
         try printNum(auxp[auxidx]);
         _ = try std.io.getStdOut().write(" = ");
         try printNumHex(auxp[auxidx + 1]);
         _ = try std.io.getStdOut().write("\n");
+
+        if (auxp[auxidx] < AUX_BUF_SIZE) auxbuf[auxp[auxidx]] = auxp[auxidx + 1];
     }
+
+    _ = try std.io.getStdOut().write("Program: ");
+    _ = try std.io.getStdOut().write(std.mem.sliceTo(@as([*:0]u8, @ptrFromInt(auxbuf[std.elf.AT_EXECFN])), 0));
+    _ = try std.io.getStdOut().write("\n");
 
     var idx: usize = 0;
     while (dyns[idx].d_tag == std.elf.DT_NULL) : (idx += 1) {
