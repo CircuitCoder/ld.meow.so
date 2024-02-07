@@ -28,7 +28,7 @@ const MapRange = struct {
     }
 };
 
-const LoadedElf = struct {
+pub const LoadedElf = struct {
     base: [*]u8,
     phdrs: []std.elf.Elf64_Phdr,
 };
@@ -103,6 +103,8 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
     var first_range: MapRange = undefined;
 
     // TODO: actually map phdr first, and use the mapped version
+    var discovered_phdr: ?usize = null;
+
     for (0..ehdr.e_phnum) |i| {
         const phdr_offset = ehdr.e_phoff + i * ehdr.e_phentsize;
         const phdr: std.elf.Elf64_Phdr = try elf_read(std.elf.Elf64_Phdr, fd, phdr_offset);
@@ -120,6 +122,10 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
                     first_range = get_map_range(phdr, page_size);
                 }
                 vaddr_max = vaddr + phdr.p_memsz;
+
+                if (ehdr.e_phoff >= phdr.p_offset and ehdr.e_phoff < phdr.p_offset + phdr.p_filesz) {
+                    discovered_phdr = phdr.p_vaddr + (ehdr.e_phoff - phdr.p_offset);
+                }
             },
             else => continue,
         }
@@ -166,7 +172,13 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
     }
 
     // TODO: If there is no PT_PHDR, find mapped phdr, or map it
-    const mapped_phdrs = base + phdr_vaddr_offset.?;
+    var mapped_phdrs = base;
+    if (phdr_vaddr_offset != null) {
+        mapped_phdrs += phdr_vaddr_offset.?;
+    } else {
+        mapped_phdrs += discovered_phdr.?;
+    }
+
     return LoadedElf{
         .base = base,
         .phdrs = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(mapped_phdrs)))[0..ehdr.e_phnum],

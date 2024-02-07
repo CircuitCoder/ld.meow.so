@@ -1,5 +1,6 @@
 const std = @import("std");
 const load = @import("./load.zig");
+const link = @import("./link.zig");
 const util = @import("./util.zig");
 
 extern const __ehdr_start: std.elf.Elf64_Ehdr;
@@ -30,9 +31,6 @@ const AUX_WE_CARE = [_]usize{
     std.elf.AT_EXECFN,
     std.elf.AT_PAGESZ,
 };
-
-// We'll use a colon-separated list here, because we don't want to induce any dyn linking on ourselves.
-const SEARCH: [:0]const u8 = "/usr/lib:/lib";
 
 const AUX_BUF_SIZE: usize = std.mem.max(usize, &AUX_WE_CARE) + 1;
 
@@ -86,9 +84,9 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     var page_size = auxmap[std.elf.AT_PAGESZ];
     if (page_size == 0) page_size = std.mem.page_size;
 
-    const target_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);
-    const target_phdr_num = auxmap[std.elf.AT_PHNUM];
-    var target_phdr = target_phdr_ptr[0..target_phdr_num];
+    const aux_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);
+    const aux_phdr_num = auxmap[std.elf.AT_PHNUM];
+    var aux_phdr = aux_phdr_ptr[0..aux_phdr_num];
 
     var self_base = auxmap[std.elf.AT_BASE];
     if (self_base == 0) { // Directly invoked
@@ -96,66 +94,37 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     }
     const self_phdr: [*]std.elf.Elf64_Phdr = @ptrFromInt(self_base + __ehdr_start.e_phoff);
 
-    var target_load: usize = undefined;
+    var app: load.LoadedElf = undefined;
 
-    if (self_phdr == target_phdr_ptr) {
+    if (self_phdr == aux_phdr_ptr) {
         _ = try std.io.getStdOut().write("Loading: ");
         _ = try std.io.getStdOut().write(std.mem.sliceTo(argv[1], 0));
         _ = try std.io.getStdOut().write("\n");
-        const app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ], null);
-        target_phdr = app.phdrs;
-        target_load = @intFromPtr(app.base);
+        app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ], null);
     } else {
-        for (target_phdr) |phdr| {
+        var target_load: usize = undefined;
+        for (aux_phdr) |phdr| {
             if (phdr.p_type == std.elf.PT_PHDR) {
                 target_load = auxmap[std.elf.AT_PHDR] - phdr.p_vaddr;
                 break;
             }
         }
+        app = load.LoadedElf{
+            .base = @ptrFromInt(target_load),
+            .phdrs = aux_phdr,
+        };
     }
 
-    // Second loop: look for PT_DYNAMIC and do dynamic linking
-    for (target_phdr) |phdr| {
-        if (phdr.p_type == std.elf.PT_DYNAMIC) {
-            _ = try std.io.getStdOut().write("Handling dyn header\n");
-            const dyn_section_ptr: [*]std.elf.Elf64_Dyn = @ptrFromInt(phdr.p_vaddr + target_load);
-            const dyn_section_len = phdr.p_memsz;
-            const dyn_section = dyn_section_ptr[0..(dyn_section_len / @sizeOf(std.elf.Elf64_Dyn))];
+    var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var link_ctx = link.LinkContext.root(alloc.allocator());
 
-            // First loop, populate single-occurance informations
-            var dyn_strtab: [*]u8 = undefined;
-            for (dyn_section) |dyn| {
-                switch (dyn.d_tag) {
-                    std.elf.DT_STRTAB => {
-                        dyn_strtab = @ptrFromInt(dyn.d_val + target_load);
-                    },
-                    else => continue,
-                }
-            }
+    try link.elf_link(
+        app,
+        page_size,
+        &link_ctx,
+    );
 
-            for (dyn_section) |dyn| {
-                switch (dyn.d_tag) {
-                    std.elf.DT_NULL => {
-                        continue;
-                    },
-                    std.elf.DT_NEEDED => {
-                        _ = try std.io.getStdOut().write("Loading library: ");
-                        const lib_name: [*:0]u8 = @ptrCast(dyn_strtab + dyn.d_val);
-                        _ = try std.io.getStdOut().write(std.mem.sliceTo(lib_name, 0));
-                        _ = try std.io.getStdOut().write("\n");
-                        _ = try load.elf_load(lib_name, page_size, SEARCH.ptr);
-                    },
-                    else => {
-                        _ = try std.io.getStdOut().write("Unimp d_tag: ");
-                        try util.printNumHex(@bitCast(dyn.d_tag));
-                        _ = try std.io.getStdOut().write("\n");
-                    },
-                }
-            }
-        }
-    }
-
-    exit(argc);
+    exit(0);
 }
 
 fn exit(code: usize) noreturn {
