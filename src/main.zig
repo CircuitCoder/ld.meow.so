@@ -46,20 +46,20 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     const envp: [*](?[*:0]u8) = @ptrCast(arg_page + 2 + argc);
     var envidx: usize = 0;
     while (envp[envidx] != null) : (envidx += 1) {
-        _ = try std.io.getStdOut().write("[E] ");
-        _ = try std.io.getStdOut().write(std.mem.sliceTo(envp[envidx].?, 0));
-        _ = try std.io.getStdOut().write("\n");
+        // _ = try std.io.getStdOut().write("[E] ");
+        // _ = try std.io.getStdOut().write(std.mem.sliceTo(envp[envidx].?, 0));
+        // _ = try std.io.getStdOut().write("\n");
     }
 
     const auxp: [*]usize = @ptrCast(envp + envidx + 1);
     var auxidx: usize = 0;
     var auxmap: [AUX_BUF_SIZE]usize = .{};
     while (auxp[auxidx] != 0) : (auxidx += 2) {
-        _ = try std.io.getStdOut().write("[A] ");
-        try util.printNum(auxp[auxidx]);
-        _ = try std.io.getStdOut().write(" = ");
-        try util.printNumHex(auxp[auxidx + 1]);
-        _ = try std.io.getStdOut().write("\n");
+        // _ = try std.io.getStdOut().write("[A] ");
+        // try util.printNum(auxp[auxidx]);
+        // _ = try std.io.getStdOut().write(" = ");
+        // try util.printNumHex(auxp[auxidx + 1]);
+        // _ = try std.io.getStdOut().write("\n");
 
         if (auxp[auxidx] < AUX_BUF_SIZE) auxmap[auxp[auxidx]] = auxp[auxidx + 1];
     }
@@ -84,7 +84,7 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
 
     const target_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);
     const target_phdr_num = auxmap[std.elf.AT_PHNUM];
-    const target_phdr = target_phdr_ptr[0..target_phdr_num];
+    var target_phdr = target_phdr_ptr[0..target_phdr_num];
 
     var self_base = auxmap[std.elf.AT_BASE];
     if (self_base == 0) { // Directly invoked
@@ -92,27 +92,26 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     }
     const self_phdr: [*]std.elf.Elf64_Phdr = @ptrFromInt(self_base + __ehdr_start.e_phoff);
 
+    var target_load: usize = undefined;
+
     if (self_phdr == target_phdr_ptr) {
         _ = try std.io.getStdOut().write("Loading: ");
         _ = try std.io.getStdOut().write(std.mem.sliceTo(argv[1], 0));
         _ = try std.io.getStdOut().write("\n");
-        try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ]);
-    }
-
-    // First loop: look for phdr section, and calculate offset based on that
-    var target_load: usize = undefined;
-    for (target_phdr) |phdr| {
-        if (phdr.p_type == std.elf.PT_PHDR) {
-            target_load = auxmap[std.elf.AT_PHDR] - phdr.p_vaddr;
-            break;
+        const app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ]);
+        target_phdr = app.phdrs;
+        target_load = @intFromPtr(app.base);
+    } else {
+        for (target_phdr) |phdr| {
+            if (phdr.p_type == std.elf.PT_PHDR) {
+                target_load = auxmap[std.elf.AT_PHDR] - phdr.p_vaddr;
+                break;
+            }
         }
     }
 
     // Second loop: look for PT_DYNAMIC and do dynamic linking
     for (target_phdr) |phdr| {
-        try util.printNumHex(phdr.p_type);
-        _ = try std.io.getStdOut().write("\n");
-
         if (phdr.p_type == std.elf.PT_DYNAMIC) {
             _ = try std.io.getStdOut().write("Handling dyn header\n");
             const dyn_section_ptr: [*]std.elf.Elf64_Dyn = @ptrFromInt(phdr.p_vaddr + target_load);
@@ -140,6 +139,7 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
                         const lib_name: [*:0]u8 = @ptrCast(dyn_strtab + dyn.d_val);
                         _ = try std.io.getStdOut().write(std.mem.sliceTo(lib_name, 0));
                         _ = try std.io.getStdOut().write("\n");
+                        _ = try load.elf_load(lib_name, page_size);
                     },
                     else => {
                         _ = try std.io.getStdOut().write("Unimp d_tag: ");

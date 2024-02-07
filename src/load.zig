@@ -28,6 +28,11 @@ const MapRange = struct {
     }
 };
 
+const LoadedElf = struct {
+    base: [*]u8,
+    phdrs: []std.elf.Elf64_Phdr,
+};
+
 fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
     const start_aligned = phdr.p_vaddr & -%page_size;
     const end_aligned = (phdr.p_vaddr + phdr.p_memsz + page_size - 1) & -%page_size;
@@ -44,7 +49,7 @@ fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
     };
 }
 
-pub fn elf_load(path: [*:0]const u8, page_size: usize) !void {
+pub fn elf_load(path: [*:0]const u8, page_size: usize) !LoadedElf {
     const fd = try std.os.openZ(path, 0, std.os.O.RDONLY);
     var ehdr = try elf_read(std.elf.Elf64_Ehdr, fd, 0);
     // TODO: detect ELF tag
@@ -120,4 +125,11 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize) !void {
             else => continue,
         }
     }
+
+    // TODO: If there is no PT_PHDR, find mapped phdr, or map it
+    const mapped_phdrs = base + phdr_vaddr_offset.?;
+    return LoadedElf{
+        .base = base,
+        .phdrs = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(mapped_phdrs)))[0..ehdr.e_phnum],
+    };
 }
