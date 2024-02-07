@@ -17,6 +17,7 @@ pub fn _start() callconv(.Naked) noreturn {
 }
 
 pub fn _dlstart(arg_page: [*]usize, dyns: [*]std.elf.Dyn) callconv(.C) noreturn {
+    // TODO: error messages
     _dlstart_impl(arg_page, dyns) catch exit(1);
 }
 
@@ -29,6 +30,9 @@ const AUX_WE_CARE = [_]usize{
     std.elf.AT_EXECFN,
     std.elf.AT_PAGESZ,
 };
+
+// We'll use a colon-separated list here, because we don't want to induce any dyn linking on ourselves.
+const SEARCH: [:0]const u8 = "/usr/lib:/lib";
 
 const AUX_BUF_SIZE: usize = std.mem.max(usize, &AUX_WE_CARE) + 1;
 
@@ -98,7 +102,7 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
         _ = try std.io.getStdOut().write("Loading: ");
         _ = try std.io.getStdOut().write(std.mem.sliceTo(argv[1], 0));
         _ = try std.io.getStdOut().write("\n");
-        const app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ]);
+        const app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ], null);
         target_phdr = app.phdrs;
         target_load = @intFromPtr(app.base);
     } else {
@@ -139,7 +143,7 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
                         const lib_name: [*:0]u8 = @ptrCast(dyn_strtab + dyn.d_val);
                         _ = try std.io.getStdOut().write(std.mem.sliceTo(lib_name, 0));
                         _ = try std.io.getStdOut().write("\n");
-                        _ = try load.elf_load(lib_name, page_size);
+                        _ = try load.elf_load(lib_name, page_size, SEARCH.ptr);
                     },
                     else => {
                         _ = try std.io.getStdOut().write("Unimp d_tag: ");

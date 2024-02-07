@@ -49,8 +49,47 @@ fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
     };
 }
 
-pub fn elf_load(path: [*:0]const u8, page_size: usize) !LoadedElf {
-    const fd = try std.os.openZ(path, 0, std.os.O.RDONLY);
+pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !LoadedElf {
+    var fd: std.os.fd_t = undefined;
+    if ((search == null) or (path[0] == '/')) {
+        // Loading application or library with absolute path
+        fd = try std.os.openZ(path, 0, std.os.O.RDONLY);
+    } else {
+        var sidx: usize = 0;
+        // Loading relative-pathed library
+        while (true) {
+            // TODO: check for overflow
+            var concat: [std.fs.MAX_PATH_BYTES - 1:0]u8 = undefined;
+            var didx: usize = 0;
+            while (search.?[sidx] != 0 and search.?[sidx] != ':') {
+                concat[didx] = search.?[sidx];
+                sidx += 1;
+                didx += 1;
+            }
+
+            var pidx: usize = 0;
+            concat[didx] = '/';
+            didx += 1;
+            while (path[pidx] != 0) {
+                concat[didx] = path[pidx];
+                didx += 1;
+                pidx += 1;
+            }
+            concat[didx] = 0;
+            _ = try std.io.getStdOut().write(concat[0..didx]);
+            _ = try std.io.getStdOut().write("\n");
+            fd = std.os.openZ(&concat, 0, std.os.O.RDONLY) catch {
+                if (search.?[sidx] == 0) {
+                    return std.os.OpenError.FileNotFound;
+                } else {
+                    sidx += 1;
+                    continue;
+                }
+            };
+            break;
+        }
+    }
+
     var ehdr = try elf_read(std.elf.Elf64_Ehdr, fd, 0);
     // TODO: detect ELF tag
     // TODO: detect ET_DYN
