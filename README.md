@@ -9,7 +9,7 @@ TODO:
 - [ ] TLS
 - [ ] Init / Finalize
 - [ ] Other weird stuff
-- [ ] Self-relocation
+- [x] Self-relocation
 
 Goals:
 - No global state, thus avoiding stage 1 of dyn linker.

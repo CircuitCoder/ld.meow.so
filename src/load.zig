@@ -46,6 +46,11 @@ pub const LoadedElf = struct {
     dyn: ?Dyn,
 };
 
+pub const JmpRel = union(enum) {
+    rela: []std.elf.Elf64_Rela,
+    rel: []std.elf.Elf64_Rel,
+};
+
 pub const Dyn = struct {
     section: []std.elf.Elf64_Dyn,
     symtab: [*]std.elf.Elf64_Sym,
@@ -54,6 +59,7 @@ pub const Dyn = struct {
     rela: ?[]std.elf.Elf64_Rela,
     rel: ?[]std.elf.Elf64_Rel,
     relr: ?[]u64,
+    jmprel: ?JmpRel,
 
     hash: hash.HashTbl,
 };
@@ -74,11 +80,25 @@ fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
     };
 }
 
+fn path_has_slash(path: [*:0]const u8) bool {
+    var cur = path;
+    while (cur[0] != 0) : ({
+        cur += 1;
+    }) {
+        if (cur[0] == '/') return true;
+    }
+    return false;
+}
+
 pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !LoadedElf {
     var fd: std.os.fd_t = undefined;
-    if ((search == null) or (path[0] == '/')) {
+    if ((search == null) or path_has_slash(path)) {
         // Loading application or library with absolute path
+        _ = try std.io.getStdOut().write("Direct open: ");
+        _ = try std.io.getStdOut().write(std.mem.span(path));
+        _ = try std.io.getStdOut().write("\n");
         fd = try std.os.openZ(path, 0, std.os.O.RDONLY);
+        _ = try std.io.getStdOut().write("Open complete\n");
     } else {
         var sidx: usize = 0;
         // Loading relative-pathed library
@@ -225,6 +245,9 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
     var dyn_rellen: usize = 0;
     var dyn_relr: ?[*]u64 = null;
     var dyn_relrlen: usize = 0;
+    var dyn_jmprel: ?[*]u64 = null;
+    var dyn_jmprelsz: usize = 0;
+    var dyn_pltrel: u64 = 0;
     // var dyn_syment: usize = undefined;
     // TODO: implement GNU Hash
     for (dyn_section) |dyn| {
@@ -260,6 +283,9 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
                 return LoadError.UnexpectedRelocEntSize;
             },
             Consts.DT_RELRSZ => dyn_relrlen = dyn.d_val / @sizeOf(u64),
+            std.elf.DT_JMPREL => dyn_jmprel = @alignCast(@ptrCast(base + dyn.d_val)),
+            std.elf.DT_PLTREL => dyn_pltrel = dyn.d_val,
+            std.elf.DT_PLTRELSZ => dyn_jmprelsz = dyn.d_val,
             // std.elf.DT_SYMENT => dyn_syment = dyn.d_val,
             else => continue,
         }
@@ -271,6 +297,19 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
 
     const hashtbl: hash.HashTbl = (dyn_gnu_hash orelse dyn_hash).?;
     const symcnt = hashtbl.symcnt();
+
+    var jmprel: ?JmpRel = null;
+    if (dyn_jmprel) |j| {
+        switch (dyn_pltrel) {
+            std.elf.DT_REL => jmprel = JmpRel{
+                .rel = @as([*]std.elf.Elf64_Rel, @alignCast(@ptrCast(j)))[0 .. dyn_jmprelsz / @sizeOf(std.elf.Elf64_Rel)],
+            },
+            std.elf.DT_RELA => jmprel = JmpRel{
+                .rela = @as([*]std.elf.Elf64_Rela, @alignCast(@ptrCast(j)))[0 .. dyn_jmprelsz / @sizeOf(std.elf.Elf64_Rela)],
+            },
+            else => {},
+        }
+    }
 
     var symtab = dyn_symtab[0..symcnt];
     _ = try std.io.getStdOut().write("Symbol count: ");
@@ -299,6 +338,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
         .rela = if (dyn_rela) |d| d[0..dyn_relalen] else null,
         .rel = if (dyn_rel) |d| d[0..dyn_rellen] else null,
         .relr = if (dyn_relr) |d| d[0..dyn_relrlen] else null,
+        .jmprel = jmprel,
     };
 }
 

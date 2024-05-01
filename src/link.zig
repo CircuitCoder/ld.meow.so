@@ -144,7 +144,7 @@ pub fn elf_link(elf: load.LoadedElf, page_size: usize, ctx: *LinkContext) !void 
 inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext, offset: u64, ty: u32, sym: u32, addend: ?i64) !void {
     // Symbol lookup
     const symbol_loc: [*]u8 = switch (ty) {
-        std.elf.R_X86_64_GLOB_DAT, std.elf.R_X86_64_64 => blk: {
+        std.elf.R_X86_64_JUMP_SLOT, std.elf.R_X86_64_GLOB_DAT, std.elf.R_X86_64_64 => blk: {
             const sym_ent = dyn.symtab[sym];
             const sym_name = std.mem.span(@as([*:0]u8, @ptrCast(dyn.strtab + sym_ent.st_name)));
             _ = try std.io.getStdOut().write("Linking symbol: ");
@@ -169,7 +169,7 @@ inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext,
             const real_addent = addend orelse tgt.*;
             tgt.* = @as(i64, @bitCast(@intFromPtr(base))) + real_addent;
         },
-        std.elf.R_X86_64_GLOB_DAT => {
+        std.elf.R_X86_64_GLOB_DAT, std.elf.R_X86_64_JUMP_SLOT => { // TODO: lazy jump slot
             const tgt: *i64 = @alignCast(@ptrCast(base + offset));
             tgt.* = symbol_loc_i64;
         },
@@ -187,7 +187,7 @@ inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext,
 }
 
 pub fn elf_reloc(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext) !void {
-    _ = try std.io.getStdOut().write("Reloc!\n");
+    _ = try std.io.getStdOut().write("Start relocation\n");
     if (dyn.rela) |t|
         for (t) |r|
             try elf_reloc_perform(dyn, base, ctx, r.r_offset, r.r_type(), r.r_sym(), r.r_addend);
@@ -195,6 +195,19 @@ pub fn elf_reloc(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext) !void {
     if (dyn.rel) |t|
         for (t) |r|
             try elf_reloc_perform(dyn, base, ctx, r.r_offset, r.r_type(), r.r_sym(), 0);
+
+    if (dyn.jmprel) |j| {
+        switch (j) {
+            .rel => |t| {
+                for (t) |r|
+                    try elf_reloc_perform(dyn, base, ctx, r.r_offset, r.r_type(), r.r_sym(), 0);
+            },
+            .rela => |t| {
+                for (t) |r|
+                    try elf_reloc_perform(dyn, base, ctx, r.r_offset, r.r_type(), r.r_sym(), r.r_addend);
+            },
+        }
+    }
 
     if (dyn.relr) |t| {
         var loc: [*]u64 = undefined;

@@ -105,12 +105,16 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     var aux_phdr = aux_phdr_ptr[0..aux_phdr_num];
 
     var app: load.LoadedElf = undefined;
+    var modified_args = arg_page;
 
     if (self_phdr == aux_phdr_ptr) {
         _ = try std.io.getStdOut().write("Loading: ");
         _ = try std.io.getStdOut().write(std.mem.sliceTo(argv[1], 0));
         _ = try std.io.getStdOut().write("\n");
         app = try load.elf_load(argv[1], auxmap[std.elf.AT_PAGESZ], null);
+        auxmap[std.elf.AT_ENTRY] = @intFromPtr(app.base) + @as(*std.elf.Elf64_Ehdr, @alignCast(@ptrCast(app.base))).*.e_entry;
+        modified_args = arg_page + 1;
+        modified_args[0] = arg_page[0] - 1;
     } else {
         var target_load: usize = undefined;
         for (aux_phdr) |phdr| {
@@ -133,7 +137,15 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
         &link_ctx,
     );
 
-    exit(0);
+    asm volatile (
+        \\ movq %[args], %%rsp
+        \\ jmpq *%[entry:P]
+        :
+        : [args] "X" (modified_args),
+          [entry] "X" (auxmap[std.elf.AT_ENTRY]),
+    );
+
+    exit(255);
 }
 
 fn exit(code: usize) noreturn {
