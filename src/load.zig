@@ -7,7 +7,7 @@ const LoadError = error{
     UnexpectedRelocEntSize,
 };
 
-const Consts = struct {
+pub const Consts = struct {
     pub const DT_RELRSZ = 35;
     pub const DT_RELR = 36;
     pub const DT_RELRENT = 37;
