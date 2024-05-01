@@ -1,5 +1,11 @@
 const std = @import("std");
 const util = @import("./util.zig");
+const hash = @import("./hash.zig");
+
+const LoadError = error{
+    HashTblNotFound,
+    UnexpectedRelocEntSize,
+};
 
 fn elf_read(comptime T: type, fd: std.os.fd_t, offset: u64) !T {
     var result: T = undefined;
@@ -31,6 +37,18 @@ const MapRange = struct {
 pub const LoadedElf = struct {
     base: [*]u8,
     phdrs: []std.elf.Elf64_Phdr,
+    dyn: ?Dyn,
+};
+
+pub const Dyn = struct {
+    section: []std.elf.Elf64_Dyn,
+    symtab: [*]std.elf.Elf64_Sym,
+    strtab: [*]u8,
+
+    rela: ?[]std.elf.Elf64_Rela,
+    rel: ?[]std.elf.Elf64_Rel,
+
+    hash: hash.HashTbl,
 };
 
 fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
@@ -179,8 +197,105 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
         mapped_phdrs += discovered_phdr.?;
     }
 
+    const phdrs: []std.elf.Elf64_Phdr = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(mapped_phdrs)))[0..ehdr.e_phnum];
+    const dyn = try elf_find_dyn(phdrs, base);
     return LoadedElf{
         .base = base,
-        .phdrs = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(mapped_phdrs)))[0..ehdr.e_phnum],
+        .phdrs = phdrs,
+        .dyn = dyn,
     };
+}
+
+pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
+    var dyn_strtab: [*]u8 = undefined;
+    var dyn_symtab: [*]std.elf.Elf64_Sym = undefined;
+    var dyn_hash: ?hash.HashTbl = null;
+    var dyn_gnu_hash: ?hash.HashTbl = null;
+
+    var dyn_rela: ?[*]std.elf.Elf64_Rela = null;
+    var dyn_relalen: usize = 0;
+    var dyn_rel: ?[*]std.elf.Elf64_Rel = null;
+    var dyn_rellen: usize = 0;
+    // var dyn_syment: usize = undefined;
+    // TODO: implement GNU Hash
+    for (dyn_section) |dyn| {
+        switch (dyn.d_tag) {
+            std.elf.DT_STRTAB => dyn_strtab = @alignCast(@ptrCast(base + dyn.d_val)),
+            std.elf.DT_SYMTAB => dyn_symtab = @alignCast(@ptrCast(base + dyn.d_val)),
+            std.elf.DT_HASH => {
+                _ = try std.io.getStdOut().write("Found DT_HASH\n");
+                dyn_hash = hash.HashTbl{
+                    .vanilla = hash.VanillaHashTbl.parse(@alignCast(@ptrCast(base + dyn.d_val))),
+                };
+            },
+            std.elf.DT_GNU_HASH => {
+                _ = try std.io.getStdOut().write("Found DT_GNU_HASH\n");
+                dyn_gnu_hash = hash.HashTbl{
+                    .gnu = hash.GNUHashTbl.parse(@alignCast(@ptrCast(base + dyn.d_val))),
+                };
+            },
+            std.elf.DT_RELA => dyn_rela = @alignCast(@ptrCast(base + dyn.d_val)),
+            std.elf.DT_RELAENT => if (dyn.d_val != @sizeOf(std.elf.Elf64_Rela)) {
+                try util.printNumHex(dyn.d_val);
+                try util.printNumHex(@sizeOf(std.elf.Elf64_Rela));
+                return LoadError.UnexpectedRelocEntSize;
+            },
+            std.elf.DT_RELASZ => dyn_relalen = dyn.d_val / @sizeOf(std.elf.Elf64_Rela),
+            std.elf.DT_REL => dyn_rel = @alignCast(@ptrCast(base + dyn.d_val)),
+            std.elf.DT_RELENT => if (dyn.d_val != @sizeOf(std.elf.Elf64_Rel)) {
+                return LoadError.UnexpectedRelocEntSize;
+            },
+            std.elf.DT_RELSZ => dyn_rellen = dyn.d_val / @sizeOf(std.elf.Elf64_Rel),
+            // std.elf.DT_SYMENT => dyn_syment = dyn.d_val,
+            else => continue,
+        }
+    }
+
+    if (dyn_hash == null and dyn_gnu_hash == null) {
+        return LoadError.HashTblNotFound;
+    }
+
+    const hashtbl: hash.HashTbl = (dyn_gnu_hash orelse dyn_hash).?;
+    const symcnt = hashtbl.symcnt();
+
+    var symtab = dyn_symtab[0..symcnt];
+    _ = try std.io.getStdOut().write("Symbol count: ");
+    try util.printNum(symcnt);
+    _ = try std.io.getStdOut().write("\n");
+
+    for (symtab) |sym| {
+        const bind = sym.st_bind();
+        if (bind == std.elf.STB_LOCAL) _ = try std.io.getStdOut().write("L ");
+        if (bind == std.elf.STB_GLOBAL) _ = try std.io.getStdOut().write("G ");
+        if (bind == std.elf.STB_WEAK) _ = try std.io.getStdOut().write("W ");
+        if (sym.st_name == 0) {
+            _ = try std.io.getStdOut().write("[NONAME]\n");
+        } else {
+            const name: [*:0]u8 = @ptrCast(dyn_strtab + sym.st_name);
+            _ = try std.io.getStdOut().write(std.mem.sliceTo(name, 0));
+            _ = try std.io.getStdOut().write("\n");
+        }
+    }
+
+    return Dyn{
+        .section = dyn_section,
+        .hash = hashtbl,
+        .symtab = dyn_symtab,
+        .strtab = dyn_strtab,
+        .rela = if (dyn_rela) |d| d[0..dyn_relalen] else null,
+        .rel = if (dyn_rel) |d| d[0..dyn_rellen] else null,
+    };
+}
+
+pub fn elf_find_dyn(phdrs: []std.elf.Elf64_Phdr, base: [*]u8) !?Dyn {
+    // Parse dynamic header
+    for (phdrs) |phdr| {
+        if (phdr.p_type == std.elf.PT_DYNAMIC) {
+            const dyn_section_ptr: [*]std.elf.Elf64_Dyn = @alignCast(@ptrCast(base + phdr.p_vaddr));
+            const dyn_section_len = phdr.p_memsz;
+            const dyn_section = dyn_section_ptr[0..(dyn_section_len / @sizeOf(std.elf.Elf64_Dyn))];
+            return try elf_parse_dyn(dyn_section, base);
+        }
+    }
+    return null;
 }

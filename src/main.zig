@@ -35,7 +35,7 @@ const AUX_WE_CARE = [_]usize{
 const AUX_BUF_SIZE: usize = std.mem.max(usize, &AUX_WE_CARE) + 1;
 
 pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
-    // TODO: self relocation
+    // Self relocation
 
     const argc = arg_page[0];
     const argv: [*][*:0]u8 = @ptrCast(arg_page + 1);
@@ -70,14 +70,25 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     _ = try std.io.getStdOut().write(std.mem.sliceTo(@as([*:0]u8, @ptrFromInt(auxmap[std.elf.AT_EXECFN])), 0));
     _ = try std.io.getStdOut().write("\n");
 
-    _ = try std.io.getStdOut().write("Self dynamic symbols:\n");
-    var idx: usize = 0;
-    while (dyns[idx].d_tag == std.elf.DT_NULL) : (idx += 1) {
-        try util.printNum(@bitCast(dyns[idx].d_tag));
-        _ = try std.io.getStdOut().write(" ");
-        try util.printNumHex(@bitCast(dyns[idx].d_val));
-        _ = try std.io.getStdOut().write("\n");
+    var self_base = auxmap[std.elf.AT_BASE];
+    if (self_base == 0) { // Directly invoked
+        self_base = @intFromPtr(&__ehdr_start);
     }
+    const self_phdr: [*]std.elf.Elf64_Phdr = @ptrFromInt(self_base + __ehdr_start.e_phoff);
+    var self_dyn_len: usize = 0;
+    while (dyns[self_dyn_len].d_tag != std.elf.DT_NULL) self_dyn_len += 1;
+    const self_dyn = try load.elf_parse_dyn(dyns[0..(self_dyn_len + 1)], @ptrFromInt(self_base));
+    try link.elf_reloc(self_dyn, @ptrFromInt(self_base));
+    _ = try std.io.getStdOut().write("Self relocation complete.");
+
+    // _ = try std.io.getStdOut().write("Self dynamic entries:\n");
+    // var idx: usize = 0;
+    // while (dyns[idx].d_tag != std.elf.DT_NULL) : (idx += 1) {
+    //     try util.printNum(@bitCast(dyns[idx].d_tag));
+    //     _ = try std.io.getStdOut().write(" ");
+    //     try util.printNumHex(@bitCast(dyns[idx].d_val));
+    //     _ = try std.io.getStdOut().write("\n");
+    // }
 
     // TODO: handle direct call, so PHDR == this phdr
 
@@ -87,12 +98,6 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     const aux_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);
     const aux_phdr_num = auxmap[std.elf.AT_PHNUM];
     var aux_phdr = aux_phdr_ptr[0..aux_phdr_num];
-
-    var self_base = auxmap[std.elf.AT_BASE];
-    if (self_base == 0) { // Directly invoked
-        self_base = @intFromPtr(&__ehdr_start);
-    }
-    const self_phdr: [*]std.elf.Elf64_Phdr = @ptrFromInt(self_base + __ehdr_start.e_phoff);
 
     var app: load.LoadedElf = undefined;
 
@@ -109,9 +114,11 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
                 break;
             }
         }
+        const base: [*]u8 = @ptrFromInt(target_load);
         app = load.LoadedElf{
-            .base = @ptrFromInt(target_load),
+            .base = base,
             .phdrs = aux_phdr,
+            .dyn = try load.elf_find_dyn(aux_phdr, base),
         };
     }
 
