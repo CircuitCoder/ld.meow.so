@@ -3,10 +3,11 @@
 Toy ELF dynliker & interp
 
 TODO:
-- [ ] Map additional library
+- [x] Map additional library
 - [ ] VDSO
 - [ ] Versioning
 - [ ] TLS
+- [ ] Init / Finalize
 - [ ] Other weird stuff
 - [ ] Self-relocation
 

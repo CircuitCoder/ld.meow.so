@@ -7,6 +7,12 @@ const LoadError = error{
     UnexpectedRelocEntSize,
 };
 
+const Consts = struct {
+    pub const DT_RELRSZ = 35;
+    pub const DT_RELR = 36;
+    pub const DT_RELRENT = 37;
+};
+
 fn elf_read(comptime T: type, fd: std.os.fd_t, offset: u64) !T {
     var result: T = undefined;
     // TODO: if file is smaller than that?
@@ -47,6 +53,7 @@ pub const Dyn = struct {
 
     rela: ?[]std.elf.Elf64_Rela,
     rel: ?[]std.elf.Elf64_Rel,
+    relr: ?[]u64,
 
     hash: hash.HashTbl,
 };
@@ -216,6 +223,8 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
     var dyn_relalen: usize = 0;
     var dyn_rel: ?[*]std.elf.Elf64_Rel = null;
     var dyn_rellen: usize = 0;
+    var dyn_relr: ?[*]u64 = null;
+    var dyn_relrlen: usize = 0;
     // var dyn_syment: usize = undefined;
     // TODO: implement GNU Hash
     for (dyn_section) |dyn| {
@@ -246,6 +255,11 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
                 return LoadError.UnexpectedRelocEntSize;
             },
             std.elf.DT_RELSZ => dyn_rellen = dyn.d_val / @sizeOf(std.elf.Elf64_Rel),
+            Consts.DT_RELR => dyn_relr = @alignCast(@ptrCast(base + dyn.d_val)),
+            Consts.DT_RELRENT => if (dyn.d_val != @sizeOf(u64)) {
+                return LoadError.UnexpectedRelocEntSize;
+            },
+            Consts.DT_RELRSZ => dyn_relrlen = dyn.d_val / @sizeOf(u64),
             // std.elf.DT_SYMENT => dyn_syment = dyn.d_val,
             else => continue,
         }
@@ -284,6 +298,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
         .strtab = dyn_strtab,
         .rela = if (dyn_rela) |d| d[0..dyn_relalen] else null,
         .rel = if (dyn_rel) |d| d[0..dyn_rellen] else null,
+        .relr = if (dyn_relr) |d| d[0..dyn_relrlen] else null,
     };
 }
 

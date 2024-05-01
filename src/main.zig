@@ -70,6 +70,8 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     _ = try std.io.getStdOut().write(std.mem.sliceTo(@as([*:0]u8, @ptrFromInt(auxmap[std.elf.AT_EXECFN])), 0));
     _ = try std.io.getStdOut().write("\n");
 
+    var trivial_link_ctx = link.LinkContext.trivial();
+
     var self_base = auxmap[std.elf.AT_BASE];
     if (self_base == 0) { // Directly invoked
         self_base = @intFromPtr(&__ehdr_start);
@@ -78,8 +80,11 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     var self_dyn_len: usize = 0;
     while (dyns[self_dyn_len].d_tag != std.elf.DT_NULL) self_dyn_len += 1;
     const self_dyn = try load.elf_parse_dyn(dyns[0..(self_dyn_len + 1)], @ptrFromInt(self_base));
-    try link.elf_reloc(self_dyn, @ptrFromInt(self_base));
-    _ = try std.io.getStdOut().write("Self relocation complete.");
+    try link.elf_reloc(self_dyn, @ptrFromInt(self_base), &trivial_link_ctx);
+    _ = try std.io.getStdOut().write("Self relocation complete.\n");
+
+    var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var link_ctx = link.LinkContext.root(alloc.allocator());
 
     // _ = try std.io.getStdOut().write("Self dynamic entries:\n");
     // var idx: usize = 0;
@@ -121,9 +126,6 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
             .dyn = try load.elf_find_dyn(aux_phdr, base),
         };
     }
-
-    var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    var link_ctx = link.LinkContext.root(alloc.allocator());
 
     try link.elf_link(
         app,
