@@ -89,7 +89,8 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
             page_size,
             &link_ctx,
         );
-        try link_ctx.append("linux-vdso.so.1", vdso);
+        const vdso_name = vdso.dyn.?.soname orelse "linux-vdso.so.??";
+        try link_ctx.append(vdso_name, vdso);
     }
 
     const aux_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);

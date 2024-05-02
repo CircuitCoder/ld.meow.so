@@ -62,6 +62,7 @@ pub const Dyn = struct {
     jmprel: ?JmpRel,
 
     hash: hash.HashTbl,
+    soname: ?[]u8,
 };
 
 fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
@@ -252,6 +253,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
     var dyn_symtab: [*]std.elf.Elf64_Sym = undefined;
     var dyn_hash: ?hash.HashTbl = null;
     var dyn_gnu_hash: ?hash.HashTbl = null;
+    var dyn_soname: ?u64 = null;
 
     var dyn_rela: ?[*]std.elf.Elf64_Rela = null;
     var dyn_relalen: usize = 0;
@@ -300,6 +302,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
             std.elf.DT_JMPREL => dyn_jmprel = @alignCast(@ptrCast(base + dyn.d_val)),
             std.elf.DT_PLTREL => dyn_pltrel = dyn.d_val,
             std.elf.DT_PLTRELSZ => dyn_jmprelsz = dyn.d_val,
+            std.elf.DT_SONAME => dyn_soname = dyn.d_val,
             // std.elf.DT_SYMENT => dyn_syment = dyn.d_val,
             else => continue,
         }
@@ -308,6 +311,14 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
     if (dyn_hash == null and dyn_gnu_hash == null) {
         return LoadError.HashTblNotFound;
     }
+
+    const soname: ?[]u8 = if (dyn_soname) |idx| blk: {
+        const soname = std.mem.span(@as([*:0]u8, @ptrCast(dyn_strtab + idx)));
+        _ = try std.io.getStdOut().write("DT_SONAME: ");
+        _ = try std.io.getStdOut().write(soname);
+        _ = try std.io.getStdOut().write("\n");
+        break :blk soname;
+    } else null;
 
     const hashtbl: hash.HashTbl = (dyn_gnu_hash orelse dyn_hash).?;
     const symcnt = hashtbl.symcnt();
@@ -353,6 +364,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
         .rel = if (dyn_rel) |d| d[0..dyn_rellen] else null,
         .relr = if (dyn_relr) |d| d[0..dyn_relrlen] else null,
         .jmprel = jmprel,
+        .soname = soname,
     };
 }
 

@@ -130,7 +130,7 @@ pub fn elf_link(elf: load.LoadedElf, page_size: usize, ctx: *LinkContext) !void 
                 try elf_link(lib, page_size, ctx);
                 try ctx.append(std.mem.span(lib_name), lib);
             },
-            std.elf.DT_STRTAB, std.elf.DT_SYMTAB, std.elf.DT_HASH, std.elf.DT_GNU_HASH, std.elf.DT_RELA, std.elf.DT_RELAENT, std.elf.DT_RELASZ, std.elf.DT_REL, std.elf.DT_RELENT, std.elf.DT_RELSZ, load.Consts.DT_RELR, load.Consts.DT_RELRENT, load.Consts.DT_RELRSZ, std.elf.DT_JMPREL, std.elf.DT_PLTREL, std.elf.DT_PLTRELSZ => {}, // Handled in load
+            std.elf.DT_STRTAB, std.elf.DT_SYMTAB, std.elf.DT_HASH, std.elf.DT_GNU_HASH, std.elf.DT_RELA, std.elf.DT_RELAENT, std.elf.DT_RELASZ, std.elf.DT_REL, std.elf.DT_RELENT, std.elf.DT_RELSZ, load.Consts.DT_RELR, load.Consts.DT_RELRENT, load.Consts.DT_RELRSZ, std.elf.DT_JMPREL, std.elf.DT_PLTREL, std.elf.DT_PLTRELSZ, std.elf.DT_SONAME => {}, // Handled in load
             std.elf.DT_STRSZ, std.elf.DT_SYMENT => {}, // Ignored
             else => {
                 _ = try std.io.getStdOut().write("Unimp d_tag: ");
