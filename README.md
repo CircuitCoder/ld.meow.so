@@ -9,6 +9,7 @@ TODO:
 - [x] vDSO
 - [x] Init
   - Finalize requires libc cooperation, so we skip those.
+- [ ] dlopen
 - [ ] TLS
   - Looking for a free-standing threading library
 - [x] Self-relocation
