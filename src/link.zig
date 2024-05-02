@@ -99,7 +99,7 @@ pub const LinkContext = struct {
         return at;
     }
 
-    pub fn append(self: *LinkContext, name: []u8, elf: load.LoadedElf) !void {
+    pub fn append(self: *LinkContext, name: []const u8, elf: load.LoadedElf) !void {
         switch (self.state) {
             .loaded => |*s| {
                 try s.put(name, elf);
@@ -145,8 +145,8 @@ pub fn elf_link(elf: load.LoadedElf, page_size: usize, ctx: *LinkContext) !void 
 
 inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext, offset: u64, ty: u32, sym: u32, addend: ?i64) !void {
     // Symbol lookup
-    const symbol_loc: [*]u8 = switch (ty) {
-        std.elf.R_X86_64_JUMP_SLOT, std.elf.R_X86_64_GLOB_DAT, std.elf.R_X86_64_64 => blk: {
+    const symbol_loc: [*]u8 = switch (@as(std.elf.R_X86_64, @enumFromInt(ty))) {
+        std.elf.R_X86_64.JUMP_SLOT, std.elf.R_X86_64.GLOB_DAT, std.elf.R_X86_64.@"64" => blk: {
             const sym_ent = dyn.symtab[sym];
             const sym_name = std.mem.span(@as([*:0]u8, @ptrCast(dyn.strtab + sym_ent.st_name)));
             _ = try std.io.getStdOut().write("Linking symbol: ");
@@ -165,17 +165,17 @@ inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext,
         else => undefined,
     };
     const symbol_loc_i64: i64 = @bitCast(@intFromPtr(symbol_loc));
-    switch (ty) {
-        std.elf.R_X86_64_RELATIVE => {
+    switch (@as(std.elf.R_X86_64, @enumFromInt(ty))) {
+        std.elf.R_X86_64.RELATIVE => {
             const tgt: *i64 = @alignCast(@ptrCast(base + offset));
             const real_addent = addend orelse tgt.*;
             tgt.* = @as(i64, @bitCast(@intFromPtr(base))) + real_addent;
         },
-        std.elf.R_X86_64_GLOB_DAT, std.elf.R_X86_64_JUMP_SLOT => { // TODO: lazy jump slot
+        std.elf.R_X86_64.GLOB_DAT, std.elf.R_X86_64.JUMP_SLOT => { // TODO: lazy jump slot
             const tgt: *i64 = @alignCast(@ptrCast(base + offset));
             tgt.* = symbol_loc_i64;
         },
-        std.elf.R_X86_64_64 => {
+        std.elf.R_X86_64.@"64" => {
             const tgt: *i64 = @alignCast(@ptrCast(base + offset));
             const real_addent = addend orelse tgt.*;
             tgt.* = symbol_loc_i64 + real_addent;

@@ -1,4 +1,5 @@
-#define size_t long long
+#define NANOPRINTF_IMPLEMENTATION
+#include "nanoprintf.h"
 
 size_t syscall(size_t op, size_t arg1, size_t arg2, size_t arg3) {
   register size_t rax __asm__ ("rax") = op;
@@ -22,4 +23,14 @@ size_t write(int fd, char *ptr, size_t len) {
 void exit(size_t ret) {
   syscall(60, ret, 0, 0);
   __builtin_unreachable();
+}
+
+void print(const char *string) {
+  int len = 0;
+  for(; string[len]; ++len) ;
+  write(1, string, len);
+}
+
+int __cxa_atexit ( void (*f)(void *), void *p, void *d ) {
+  print("At exit called");
 }

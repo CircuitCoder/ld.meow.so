@@ -30,6 +30,7 @@ const AUX_WE_CARE = [_]usize{
     std.elf.AT_PHDR,
     std.elf.AT_EXECFN,
     std.elf.AT_PAGESZ,
+    std.elf.AT_SYSINFO_EHDR,
 };
 
 const AUX_BUF_SIZE: usize = std.mem.max(usize, &AUX_WE_CARE) + 1;
@@ -47,22 +48,12 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     // Iterate through env ptr
     const envp: [*](?[*:0]u8) = @ptrCast(arg_page + 2 + argc);
     var envidx: usize = 0;
-    while (envp[envidx] != null) : (envidx += 1) {
-        // _ = try std.io.getStdOut().write("[E] ");
-        // _ = try std.io.getStdOut().write(std.mem.sliceTo(envp[envidx].?, 0));
-        // _ = try std.io.getStdOut().write("\n");
-    }
+    while (envp[envidx] != null) : (envidx += 1) {}
 
     const auxp: [*]usize = @ptrCast(envp + envidx + 1);
     var auxidx: usize = 0;
-    var auxmap: [AUX_BUF_SIZE]usize = .{};
+    var auxmap = std.mem.zeroes([AUX_BUF_SIZE]usize);
     while (auxp[auxidx] != 0) : (auxidx += 2) {
-        // _ = try std.io.getStdOut().write("[A] ");
-        // try util.printNum(auxp[auxidx]);
-        // _ = try std.io.getStdOut().write(" = ");
-        // try util.printNumHex(auxp[auxidx + 1]);
-        // _ = try std.io.getStdOut().write("\n");
-
         if (auxp[auxidx] < AUX_BUF_SIZE) auxmap[auxp[auxidx]] = auxp[auxidx + 1];
     }
 
@@ -86,23 +77,24 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var link_ctx = link.LinkContext.root(alloc.allocator());
 
-    // _ = try std.io.getStdOut().write("Self dynamic entries:\n");
-    // var idx: usize = 0;
-    // while (dyns[idx].d_tag != std.elf.DT_NULL) : (idx += 1) {
-    //     try util.printNum(@bitCast(dyns[idx].d_tag));
-    //     _ = try std.io.getStdOut().write(" ");
-    //     try util.printNumHex(@bitCast(dyns[idx].d_val));
-    //     _ = try std.io.getStdOut().write("\n");
-    // }
-
-    // TODO: handle direct call, so PHDR == this phdr
-
     var page_size = auxmap[std.elf.AT_PAGESZ];
     if (page_size == 0) page_size = std.mem.page_size;
 
+    // vDSO
+    if (auxmap[std.elf.AT_SYSINFO_EHDR] != 0) {
+        _ = try std.io.getStdOut().write("Found vDSO\n");
+        const vdso = try load.elf_load_mapped(@ptrFromInt(auxmap[std.elf.AT_SYSINFO_EHDR]));
+        try link.elf_link(
+            vdso,
+            page_size,
+            &link_ctx,
+        );
+        try link_ctx.append("linux-vdso.so.1", vdso);
+    }
+
     const aux_phdr_ptr: [*]std.elf.Elf64_Phdr = @ptrFromInt(auxmap[std.elf.AT_PHDR]);
     const aux_phdr_num = auxmap[std.elf.AT_PHNUM];
-    var aux_phdr = aux_phdr_ptr[0..aux_phdr_num];
+    const aux_phdr = aux_phdr_ptr[0..aux_phdr_num];
 
     var app: load.LoadedElf = undefined;
     var modified_args = arg_page;

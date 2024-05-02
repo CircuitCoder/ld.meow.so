@@ -1,12 +1,23 @@
-#define size_t long long
+#include <time.h>
+#include "nanoprintf.h"
 
-size_t write(int fd, char *ptr, size_t len);
+void print(const char *string);
 void exit(size_t ret);
+extern int clock_gettime(clockid_t clk_id, struct timespec *tp) __attribute__((weak_import, weak));
 
 const char hw[] = "Hello, world!\n";
-const size_t hw_len = sizeof(hw) - 1;
 
 int _start() {
-  write(1, hw, hw_len);
+  print(hw);
+  struct timespec time;
+  clock_gettime(CLOCK_REALTIME, &time);
+  const char format_buffer[100];
+
+  int secs = time.tv_sec % 60;
+  int mins = (time.tv_sec / 60) % 60;
+  int hrs = (time.tv_sec / 60 / 60) % 24;
+
+  npf_snprintf(format_buffer, 100, "%d:%d:%dZ\n", hrs, mins, secs);
+  print(format_buffer);
   exit(0);
 }

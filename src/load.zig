@@ -13,10 +13,10 @@ pub const Consts = struct {
     pub const DT_RELRENT = 37;
 };
 
-fn elf_read(comptime T: type, fd: std.os.fd_t, offset: u64) !T {
+fn elf_read(comptime T: type, fd: std.posix.fd_t, offset: u64) !T {
     var result: T = undefined;
     // TODO: if file is smaller than that?
-    _ = try std.os.pread(fd, @as([*]u8, @ptrCast(&result))[0..@sizeOf(T)], offset);
+    _ = try std.posix.pread(fd, @as([*]u8, @ptrCast(&result))[0..@sizeOf(T)], offset);
     return result;
 }
 
@@ -69,9 +69,9 @@ fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
     const end_aligned = (phdr.p_vaddr + phdr.p_memsz + page_size - 1) & -%page_size;
     const start_diff = phdr.p_vaddr - start_aligned;
     var prot: u32 = 0;
-    if (phdr.p_flags & std.elf.PF_R != 0) prot |= std.os.PROT.READ;
-    if (phdr.p_flags & std.elf.PF_W != 0) prot |= std.os.PROT.WRITE;
-    if (phdr.p_flags & std.elf.PF_X != 0) prot |= std.os.PROT.EXEC;
+    if (phdr.p_flags & std.elf.PF_R != 0) prot |= std.posix.PROT.READ;
+    if (phdr.p_flags & std.elf.PF_W != 0) prot |= std.posix.PROT.WRITE;
+    if (phdr.p_flags & std.elf.PF_X != 0) prot |= std.posix.PROT.EXEC;
     return MapRange{
         .offset_aligned = phdr.p_offset - start_diff,
         .start_aligned = start_aligned,
@@ -91,13 +91,13 @@ fn path_has_slash(path: [*:0]const u8) bool {
 }
 
 pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !LoadedElf {
-    var fd: std.os.fd_t = undefined;
+    var fd: std.posix.fd_t = undefined;
     if ((search == null) or path_has_slash(path)) {
         // Loading application or library with absolute path
         _ = try std.io.getStdOut().write("Direct open: ");
         _ = try std.io.getStdOut().write(std.mem.span(path));
         _ = try std.io.getStdOut().write("\n");
-        fd = try std.os.openZ(path, 0, std.os.O.RDONLY);
+        fd = try std.posix.openZ(path, std.posix.O{}, 0);
         _ = try std.io.getStdOut().write("Open complete\n");
     } else {
         var sidx: usize = 0;
@@ -123,9 +123,9 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
             concat[didx] = 0;
             _ = try std.io.getStdOut().write(concat[0..didx]);
             _ = try std.io.getStdOut().write("\n");
-            fd = std.os.openZ(&concat, 0, std.os.O.RDONLY) catch {
+            fd = std.posix.openZ(&concat, std.posix.O{}, 0) catch {
                 if (search.?[sidx] == 0) {
-                    return std.os.OpenError.FileNotFound;
+                    return std.posix.OpenError.FileNotFound;
                 } else {
                     sidx += 1;
                     continue;
@@ -135,7 +135,7 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
         }
     }
 
-    var ehdr = try elf_read(std.elf.Elf64_Ehdr, fd, 0);
+    const ehdr = try elf_read(std.elf.Elf64_Ehdr, fd, 0);
     // TODO: detect ELF tag
     // TODO: detect ET_DYN
 
@@ -180,8 +180,8 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
     const vaddr_max_aligned = (vaddr_max.? + page_size - 1) & -%page_size;
     const map_len = vaddr_max_aligned - vaddr_min_aligned;
 
-    const first_mapped_raw = try std.os.mmap(null, map_len, first_range.prot, std.os.MAP.PRIVATE, fd, first_range.offset_aligned);
-    std.os.munmap(@alignCast(first_mapped_raw[first_range.len()..]));
+    const first_mapped_raw = try std.posix.mmap(null, map_len, first_range.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE }, fd, first_range.offset_aligned);
+    std.posix.munmap(@alignCast(first_mapped_raw[first_range.len()..]));
     const first_mapped = first_mapped_raw[0..first_range.len()];
 
     const base = first_mapped.ptr - first_range.start_aligned;
@@ -210,8 +210,9 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
                 // try util.printNumHex(@intFromPtr(base) + range.start_aligned + range.len());
                 // _ = try std.io.getStdOut().write("\n");
 
-                _ = try std.os.mmap(@alignCast(base + range.start_aligned), range.len(), range.prot, std.os.MAP.PRIVATE | std.os.MAP.FIXED_NOREPLACE, fd, range.offset_aligned);
+                _ = try std.posix.mmap(@alignCast(base + range.start_aligned), range.len(), range.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE, .FIXED_NOREPLACE = true }, fd, range.offset_aligned);
             },
+            // FIXME: BSS?
             else => continue,
         }
     }
@@ -225,6 +226,19 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
     }
 
     const phdrs: []std.elf.Elf64_Phdr = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(mapped_phdrs)))[0..ehdr.e_phnum];
+    const dyn = try elf_find_dyn(phdrs, base);
+    return LoadedElf{
+        .base = base,
+        .phdrs = phdrs,
+        .dyn = dyn,
+    };
+}
+
+pub fn elf_load_mapped(base: [*]u8) !LoadedElf {
+    const ehdr: *std.elf.Elf64_Ehdr = @alignCast(@ptrCast(base));
+    // This is actually not always correct. But it's the best we can do. Let's hope whoever loaded the image have fixed e_phoff
+    const phdr_base = base + ehdr.e_phoff;
+    const phdrs: []std.elf.Elf64_Phdr = @as([*]std.elf.Elf64_Phdr, @alignCast(@ptrCast(phdr_base)))[0..ehdr.e_phnum];
     const dyn = try elf_find_dyn(phdrs, base);
     return LoadedElf{
         .base = base,
@@ -311,7 +325,7 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
         }
     }
 
-    var symtab = dyn_symtab[0..symcnt];
+    const symtab = dyn_symtab[0..symcnt];
     _ = try std.io.getStdOut().write("Symbol count: ");
     try util.printNum(symcnt);
     _ = try std.io.getStdOut().write("\n");
