@@ -7,9 +7,10 @@ Require Zig 0.12.0
 TODO:
 - [x] Map additional library
 - [x] vDSO
+- [x] Init
+  - Finalize requires libc cooperation, so we skip those.
 - [ ] TLS
-- [ ] Init / Finalize
-- [ ] Other weird stuff
+  - Looking for a free-standing threading library
 - [x] Self-relocation
 
 Assumptions:

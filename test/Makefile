@@ -1,6 +1,6 @@
 all: main init
 
-CCFLAGS=-fno-stack-protector -nostdlib -fPIE
+CCFLAGS=-fno-stack-protector -nostdlib -fPIE -fPIC -g -O0
 CXXFLAGS=${CCFLAGS} -fno-exceptions -fno-rtti
 
 lib.so: lib.c

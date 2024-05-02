@@ -51,6 +51,8 @@ pub const JmpRel = union(enum) {
     rel: []std.elf.Elf64_Rel,
 };
 
+const INIT_FUNC = fn () callconv(.C) void;
+
 pub const Dyn = struct {
     section: []std.elf.Elf64_Dyn,
     symtab: [*]std.elf.Elf64_Sym,
@@ -60,6 +62,9 @@ pub const Dyn = struct {
     rel: ?[]std.elf.Elf64_Rel,
     relr: ?[]u64,
     jmprel: ?JmpRel,
+
+    init: ?*INIT_FUNC,
+    inits: []*INIT_FUNC,
 
     hash: hash.HashTbl,
     soname: ?[]u8,
@@ -264,6 +269,10 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
     var dyn_jmprel: ?[*]u64 = null;
     var dyn_jmprelsz: usize = 0;
     var dyn_pltrel: u64 = 0;
+
+    var dyn_init: ?*INIT_FUNC = null;
+    var dyn_inits: ?[*]*INIT_FUNC = null;
+    var dyn_initlen: usize = 0;
     // var dyn_syment: usize = undefined;
     // TODO: implement GNU Hash
     for (dyn_section) |dyn| {
@@ -302,7 +311,18 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
             std.elf.DT_JMPREL => dyn_jmprel = @alignCast(@ptrCast(base + dyn.d_val)),
             std.elf.DT_PLTREL => dyn_pltrel = dyn.d_val,
             std.elf.DT_PLTRELSZ => dyn_jmprelsz = dyn.d_val,
+
             std.elf.DT_SONAME => dyn_soname = dyn.d_val,
+
+            std.elf.DT_INIT => {
+                dyn_init = @ptrCast(base + dyn.d_val);
+            },
+            std.elf.DT_INIT_ARRAY => {
+                dyn_inits = @alignCast(@ptrCast(base + dyn.d_val));
+            },
+            std.elf.DT_INIT_ARRAYSZ => {
+                dyn_initlen = dyn.d_val / @sizeOf(*INIT_FUNC);
+            },
             // std.elf.DT_SYMENT => dyn_syment = dyn.d_val,
             else => continue,
         }
@@ -365,6 +385,9 @@ pub fn elf_parse_dyn(dyn_section: []std.elf.Elf64_Dyn, base: [*]u8) !Dyn {
         .relr = if (dyn_relr) |d| d[0..dyn_relrlen] else null,
         .jmprel = jmprel,
         .soname = soname,
+
+        .init = dyn_init,
+        .inits = if (dyn_inits) |i| i[0..dyn_initlen] else &.{},
     };
 }
 

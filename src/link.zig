@@ -10,10 +10,10 @@ const LinkError = error{
     SymbolNotFound,
 };
 
-pub const LinkContextState = union(enum) {
-    trivial: void,
-    loaded: std.StringHashMap(load.LoadedElf),
-};
+pub const LinkContextState = union(enum) { trivial: void, loaded: struct {
+    map: std.StringHashMap(load.LoadedElf),
+    topo: std.ArrayList([]const u8),
+} };
 
 pub const LinkContext = struct {
     state: LinkContextState,
@@ -25,9 +25,10 @@ pub const LinkContext = struct {
     }
 
     pub fn root(alloc: std.mem.Allocator) LinkContext {
-        return LinkContext{ .state = LinkContextState{
-            .loaded = std.StringHashMap(load.LoadedElf).init(alloc),
-        } };
+        return LinkContext{ .state = LinkContextState{ .loaded = .{
+            .map = std.StringHashMap(load.LoadedElf).init(alloc),
+            .topo = std.ArrayList([]const u8).init(alloc),
+        } } };
     }
 
     pub fn lookup(self: *const LinkContext, name: []u8, current: load.Dyn, current_base: [*]u8) !?[*]u8 {
@@ -38,8 +39,12 @@ pub const LinkContext = struct {
 
         // Query self
         if (current.hash.lookup(name, current)) |symidx| {
-            _ = try std.io.getStdOut().write("Found in local\n");
             const sym: std.elf.Elf64_Sym = current.symtab[symidx];
+
+            _ = try std.io.getStdOut().write("Found in local: ");
+            try util.printNumHex(@intFromPtr(current_base + sym.st_value));
+            _ = try std.io.getStdOut().write("\n");
+
             switch (sym.st_bind()) {
                 std.elf.STB_LOCAL => {
                     return current_base + sym.st_value;
@@ -54,7 +59,7 @@ pub const LinkContext = struct {
         switch (self.state) {
             .trivial => {},
             .loaded => |s| {
-                var it = s.valueIterator();
+                var it = s.map.valueIterator();
                 while (it.next()) |elf| {
                     if (elf.*.dyn) |d| {
                         const symidx: ?usize = d.hash.lookup(name, d);
@@ -102,7 +107,8 @@ pub const LinkContext = struct {
     pub fn append(self: *LinkContext, name: []const u8, elf: load.LoadedElf) !void {
         switch (self.state) {
             .loaded => |*s| {
-                try s.put(name, elf);
+                try s.map.put(name, elf);
+                try s.topo.append(name);
             },
             .trivial => {},
         }
@@ -130,7 +136,7 @@ pub fn elf_link(elf: load.LoadedElf, page_size: usize, ctx: *LinkContext) !void 
                 try elf_link(lib, page_size, ctx);
                 try ctx.append(std.mem.span(lib_name), lib);
             },
-            std.elf.DT_STRTAB, std.elf.DT_SYMTAB, std.elf.DT_HASH, std.elf.DT_GNU_HASH, std.elf.DT_RELA, std.elf.DT_RELAENT, std.elf.DT_RELASZ, std.elf.DT_REL, std.elf.DT_RELENT, std.elf.DT_RELSZ, load.Consts.DT_RELR, load.Consts.DT_RELRENT, load.Consts.DT_RELRSZ, std.elf.DT_JMPREL, std.elf.DT_PLTREL, std.elf.DT_PLTRELSZ, std.elf.DT_SONAME => {}, // Handled in load
+            std.elf.DT_STRTAB, std.elf.DT_SYMTAB, std.elf.DT_HASH, std.elf.DT_GNU_HASH, std.elf.DT_RELA, std.elf.DT_RELAENT, std.elf.DT_RELASZ, std.elf.DT_REL, std.elf.DT_RELENT, std.elf.DT_RELSZ, load.Consts.DT_RELR, load.Consts.DT_RELRENT, load.Consts.DT_RELRSZ, std.elf.DT_JMPREL, std.elf.DT_PLTREL, std.elf.DT_PLTRELSZ, std.elf.DT_SONAME, std.elf.DT_INIT, std.elf.DT_INIT_ARRAY, std.elf.DT_INIT_ARRAYSZ => {}, // Handled in load
             std.elf.DT_STRSZ, std.elf.DT_SYMENT => {}, // Ignored
             else => {
                 _ = try std.io.getStdOut().write("Unimp d_tag: ");
@@ -165,6 +171,9 @@ inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext,
         else => undefined,
     };
     const symbol_loc_i64: i64 = @bitCast(@intFromPtr(symbol_loc));
+    _ = try std.io.getStdOut().write("Reloc tgt: ");
+    try util.printNumHex(@intFromPtr(base + offset));
+    _ = try std.io.getStdOut().write("\n");
     switch (@as(std.elf.R_X86_64, @enumFromInt(ty))) {
         std.elf.R_X86_64.RELATIVE => {
             const tgt: *i64 = @alignCast(@ptrCast(base + offset));

@@ -77,6 +77,8 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
     var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var link_ctx = link.LinkContext.root(alloc.allocator());
 
+    // FIXME: append ld.so into link_ctx
+
     var page_size = auxmap[std.elf.AT_PAGESZ];
     if (page_size == 0) page_size = std.mem.page_size;
 
@@ -129,6 +131,27 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
         page_size,
         &link_ctx,
     );
+    try link_ctx.append("", app);
+
+    // Init, fini cannot be implemented without help from libc
+    switch (link_ctx.state) {
+        .trivial => unreachable,
+        .loaded => |s| {
+            for (s.topo.items) |name| {
+                const elf = s.map.getPtr(name).?;
+                if (elf.dyn == null) continue;
+                if (elf.dyn.?.init) |i| {
+                    i();
+                }
+                for (elf.dyn.?.inits) |i| {
+                    _ = try std.io.getStdOut().write("Found init: ");
+                    try util.printNumHex(@intFromPtr(i));
+                    _ = try std.io.getStdOut().write("\n");
+                    i();
+                }
+            }
+        },
+    }
 
     asm volatile (
         \\ movq %[args], %%rsp

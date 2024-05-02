@@ -20,7 +20,20 @@ size_t write(int fd, char *ptr, size_t len) {
   return syscall(1, fd, ptr, len);
 }
 
+typedef void (*handler_func)(void *);
+struct handler {
+  handler_func func;
+  void *args;
+};
+struct handler scheduled_handlers[10];
+
+__attribute__(( section(".data") ))
+int scheduled_handler_cnt = 0;
+
 void exit(size_t ret) {
+  for(int i = 0; i < scheduled_handler_cnt; ++i)
+    scheduled_handlers[i].func(scheduled_handlers[i].args);
+
   syscall(60, ret, 0, 0);
   __builtin_unreachable();
 }
@@ -32,5 +45,9 @@ void print(const char *string) {
 }
 
 int __cxa_atexit ( void (*f)(void *), void *p, void *d ) {
-  print("At exit called");
+  print("At exit called\n");
+  if(scheduled_handler_cnt == 10) return; // Unable to handle more!
+  scheduled_handlers[scheduled_handler_cnt].func = f;
+  scheduled_handlers[scheduled_handler_cnt].args = p;
+  scheduled_handler_cnt++;
 }
