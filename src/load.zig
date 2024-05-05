@@ -34,8 +34,58 @@ const MapRange = struct {
     offset_aligned: usize,
     start_aligned: usize,
     end_aligned: usize,
+    end_file_aligned: usize,
+    zeroing: ?usize,
     prot: u32,
-    fn len(self: MapRange) usize {
+
+    fn from(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
+        const start_aligned = phdr.p_vaddr & -%page_size;
+        const end_aligned = (phdr.p_vaddr + phdr.p_memsz + page_size - 1) & -%page_size;
+        const end_file_aligned = (phdr.p_vaddr + phdr.p_filesz + page_size - 1) & -%page_size;
+        const start_diff = phdr.p_vaddr - start_aligned;
+
+        var prot: u32 = 0;
+        if (phdr.p_flags & std.elf.PF_R != 0) prot |= std.posix.PROT.READ;
+        if (phdr.p_flags & std.elf.PF_W != 0) prot |= std.posix.PROT.WRITE;
+        if (phdr.p_flags & std.elf.PF_X != 0) prot |= std.posix.PROT.EXEC;
+
+        const zeroing: ?usize = if (phdr.p_flags & std.elf.PF_W != 0 and phdr.p_vaddr + phdr.p_filesz != end_file_aligned)
+            phdr.p_filesz + start_diff
+        else
+            null;
+        return MapRange{
+            .offset_aligned = phdr.p_offset - start_diff,
+            .start_aligned = start_aligned,
+            .end_aligned = end_aligned,
+            .end_file_aligned = end_file_aligned,
+            .zeroing = zeroing,
+            .prot = prot,
+        };
+    }
+
+    fn apply(self: MapRange, base: ?[*]u8, fd: std.posix.fd_t, max_avoidance: usize) ![]u8 {
+        const file_portion = if (base) |b|
+            try std.posix.mmap(@alignCast(b + self.start_aligned), self.file_len(), self.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE, .FIXED_NOREPLACE = true }, fd, self.offset_aligned)
+        else blk: {
+            const mapped = try std.posix.mmap(null, max_avoidance, self.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE }, fd, self.offset_aligned);
+            std.posix.munmap(@alignCast(mapped[self.file_len()..]));
+            break :blk mapped[0..self.file_len()];
+        };
+
+        if (self.zeroing) |z| {
+            @memset(file_portion[z..], 0);
+        }
+
+        return file_portion.ptr[0..self.tot_len()];
+    }
+
+    fn file_len(self: MapRange) usize {
+        return self.end_file_aligned - self.start_aligned;
+    }
+    fn zero_len(self: MapRange) usize {
+        return self.end_aligned - self.end_file_aligned;
+    }
+    fn tot_len(self: MapRange) usize {
         return self.end_aligned - self.start_aligned;
     }
 };
@@ -69,22 +119,6 @@ pub const Dyn = struct {
     hash: hash.HashTbl,
     soname: ?[]u8,
 };
-
-fn get_map_range(phdr: std.elf.Elf64_Phdr, page_size: usize) MapRange {
-    const start_aligned = phdr.p_vaddr & -%page_size;
-    const end_aligned = (phdr.p_vaddr + phdr.p_memsz + page_size - 1) & -%page_size;
-    const start_diff = phdr.p_vaddr - start_aligned;
-    var prot: u32 = 0;
-    if (phdr.p_flags & std.elf.PF_R != 0) prot |= std.posix.PROT.READ;
-    if (phdr.p_flags & std.elf.PF_W != 0) prot |= std.posix.PROT.WRITE;
-    if (phdr.p_flags & std.elf.PF_X != 0) prot |= std.posix.PROT.EXEC;
-    return MapRange{
-        .offset_aligned = phdr.p_offset - start_diff,
-        .start_aligned = start_aligned,
-        .end_aligned = end_aligned,
-        .prot = prot,
-    };
-}
 
 fn path_has_slash(path: [*:0]const u8) bool {
     var cur = path;
@@ -170,7 +204,7 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
                 const vaddr = phdr.p_vaddr;
                 if (vaddr_min == null) {
                     vaddr_min = vaddr;
-                    first_range = get_map_range(phdr, page_size);
+                    first_range = MapRange.from(phdr, page_size);
                 }
                 vaddr_max = vaddr + phdr.p_memsz;
 
@@ -184,11 +218,12 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
 
     const vaddr_min_aligned = vaddr_min.? & -%page_size;
     const vaddr_max_aligned = (vaddr_max.? + page_size - 1) & -%page_size;
-    const map_len = vaddr_max_aligned - vaddr_min_aligned;
+    const tot_map_len = vaddr_max_aligned - vaddr_min_aligned;
 
-    const first_mapped_raw = try std.posix.mmap(null, map_len, first_range.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE }, fd, first_range.offset_aligned);
-    std.posix.munmap(@alignCast(first_mapped_raw[first_range.len()..]));
-    const first_mapped = first_mapped_raw[0..first_range.len()];
+    // const first_mapped_raw = try std.posix.mmap(null, map_len, first_range.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE }, fd, first_range.offset_aligned);
+    // std.posix.munmap(@alignCast(first_mapped_raw[first_range.len()..]));
+    // const first_mapped = first_mapped_raw[0..first_range.len()];
+    const first_mapped = try first_range.apply(null, fd, tot_map_len);
 
     const base = first_mapped.ptr - first_range.start_aligned;
     var first_load = true;
@@ -209,14 +244,13 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
                     continue;
                 }
 
-                const range = get_map_range(phdr, page_size);
+                const range = MapRange.from(phdr, page_size);
+                _ = try range.apply(base, fd, tot_map_len);
 
                 // try util.printNumHex(@intFromPtr(base) + range.start_aligned);
                 // _ = try std.io.getStdOut().write("\n");
                 // try util.printNumHex(@intFromPtr(base) + range.start_aligned + range.len());
                 // _ = try std.io.getStdOut().write("\n");
-
-                _ = try std.posix.mmap(@alignCast(base + range.start_aligned), range.len(), range.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE, .FIXED_NOREPLACE = true }, fd, range.offset_aligned);
             },
             // FIXME: BSS?
             else => continue,

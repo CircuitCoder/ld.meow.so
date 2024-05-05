@@ -26,8 +26,6 @@ struct handler {
   void *args;
 };
 struct handler scheduled_handlers[10];
-
-__attribute__(( section(".data") ))
 int scheduled_handler_cnt = 0;
 
 void exit(size_t ret) {
