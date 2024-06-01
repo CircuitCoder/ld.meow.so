@@ -153,6 +153,8 @@ pub fn _dlstart_impl(arg_page: [*]usize, dyns: [*]std.elf.Dyn) !noreturn {
         },
     }
 
+    _ = try std.io.getStdOut().write("Transfer ctrl\n--------\n\n\n");
+
     asm volatile (
         \\ movq %[args], %%rsp
         \\ jmpq *%[entry:P]

@@ -151,7 +151,7 @@ pub fn elf_link(elf: load.LoadedElf, page_size: usize, ctx: *LinkContext) !void 
 
 inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext, offset: u64, ty: u32, sym: u32, addend: ?i64) !void {
     // Symbol lookup
-    const symbol_loc: [*]u8 = switch (@as(std.elf.R_X86_64, @enumFromInt(ty))) {
+    const symbol_loc: ?[*]u8 = switch (@as(std.elf.R_X86_64, @enumFromInt(ty))) {
         std.elf.R_X86_64.JUMP_SLOT, std.elf.R_X86_64.GLOB_DAT, std.elf.R_X86_64.@"64" => blk: {
             const sym_ent = dyn.symtab[sym];
             const sym_name = std.mem.span(@as([*:0]u8, @ptrCast(dyn.strtab + sym_ent.st_name)));
@@ -166,11 +166,11 @@ inline fn elf_reloc_perform(dyn: load.Dyn, base: [*]u8, ctx: *const LinkContext,
                 // return LinkError.SymbolNotFound;
                 return;
             }
-            break :blk sym_concrete.?;
+            break :blk sym_concrete;
         },
         else => undefined,
     };
-    const symbol_loc_i64: i64 = @bitCast(@intFromPtr(symbol_loc));
+    const symbol_loc_i64: i64 = if (symbol_loc) |l| @bitCast(@intFromPtr(l)) else 0;
     _ = try std.io.getStdOut().write("Reloc tgt: ");
     try util.printNumHex(@intFromPtr(base + offset));
     _ = try std.io.getStdOut().write("\n");

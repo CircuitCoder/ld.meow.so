@@ -5,6 +5,7 @@ const hash = @import("./hash.zig");
 const LoadError = error{
     HashTblNotFound,
     UnexpectedRelocEntSize,
+    NotELF,
 };
 
 pub const Consts = struct {
@@ -64,6 +65,11 @@ const MapRange = struct {
     }
 
     fn apply(self: MapRange, base: ?[*]u8, fd: std.posix.fd_t, max_avoidance: usize) ![]u8 {
+        try util.printNumHex(self.start_aligned);
+        _ = try std.io.getStdOut().write(" -> ");
+        try util.printNumHex(self.end_aligned);
+        _ = try std.io.getStdOut().write("\n");
+
         const file_portion = if (base) |b|
             try std.posix.mmap(@alignCast(b + self.start_aligned), self.file_len(), self.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE, .FIXED_NOREPLACE = true }, fd, self.offset_aligned)
         else blk: {
@@ -71,6 +77,10 @@ const MapRange = struct {
             std.posix.munmap(@alignCast(mapped[self.file_len()..]));
             break :blk mapped[0..self.file_len()];
         };
+
+        if (self.zero_len() != 0) {
+            _ = try std.posix.mmap(@alignCast(file_portion.ptr + file_portion.len), self.zero_len(), self.prot, std.posix.MAP{ .TYPE = std.os.linux.MAP_TYPE.PRIVATE, .FIXED_NOREPLACE = true, .ANONYMOUS = true }, 0, 0);
+        }
 
         if (self.zeroing) |z| {
             @memset(file_portion[z..], 0);
@@ -131,14 +141,14 @@ fn path_has_slash(path: [*:0]const u8) bool {
 }
 
 pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !LoadedElf {
-    var fd: std.posix.fd_t = undefined;
     if ((search == null) or path_has_slash(path)) {
         // Loading application or library with absolute path
         _ = try std.io.getStdOut().write("Direct open: ");
         _ = try std.io.getStdOut().write(std.mem.span(path));
         _ = try std.io.getStdOut().write("\n");
-        fd = try std.posix.openZ(path, std.posix.O{}, 0);
+        const fd: std.posix.fd_t = try std.posix.openZ(path, std.posix.O{}, 0);
         _ = try std.io.getStdOut().write("Open complete\n");
+        return elf_load_fd(fd, page_size);
     } else {
         var sidx: usize = 0;
         // Loading relative-pathed library
@@ -163,7 +173,7 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
             concat[didx] = 0;
             _ = try std.io.getStdOut().write(concat[0..didx]);
             _ = try std.io.getStdOut().write("\n");
-            fd = std.posix.openZ(&concat, std.posix.O{}, 0) catch {
+            const fd: std.posix.fd_t = std.posix.openZ(&concat, std.posix.O{}, 0) catch {
                 if (search.?[sidx] == 0) {
                     return std.posix.OpenError.FileNotFound;
                 } else {
@@ -171,11 +181,14 @@ pub fn elf_load(path: [*:0]const u8, page_size: usize, search: ?[*:0]const u8) !
                     continue;
                 }
             };
-            break;
+            return elf_load_fd(fd, page_size) catch continue;
         }
     }
+}
 
+pub fn elf_load_fd(fd: std.posix.fd_t, page_size: usize) !LoadedElf {
     const ehdr = try elf_read(std.elf.Elf64_Ehdr, fd, 0);
+    if (!std.mem.eql(u8, ehdr.e_ident[0..4], &([4]u8{ 0x7f, 'E', 'L', 'F' }))) return LoadError.NotELF;
     // TODO: detect ELF tag
     // TODO: detect ET_DYN
 
